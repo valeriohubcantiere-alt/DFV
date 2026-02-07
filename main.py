@@ -1,10 +1,11 @@
-import google.generativeai as genai
-from pdf2image import convert_from_path
+from google import genai
+import fitz  # PyMuPDF
 import os
 from PIL import Image
+import io
 
 # Configurazione API Gemini
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 # Importa il prompt dal file esterno
 from prompt import PROMPT
@@ -22,7 +23,15 @@ def converti_pdf_in_immagini(percorso_pdf, dpi=200):
         Lista di immagini PIL
     """
     print("Conversione PDF in immagini...")
-    immagini = convert_from_path(percorso_pdf, dpi=dpi)
+    doc = fitz.open(percorso_pdf)
+    zoom = dpi / 72
+    matrix = fitz.Matrix(zoom, zoom)
+    immagini = []
+    for page in doc:
+        pix = page.get_pixmap(matrix=matrix)
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        immagini.append(img)
+    doc.close()
     print(f"✓ Convertite {len(immagini)} pagine")
     return immagini
 
@@ -44,9 +53,6 @@ def elabora_pdf_con_gemini(percorso_pdf, modello="gemini-2.5-pro", dpi=200):
     numero_totale_pagine = len(immagini)
 
     print(f"\nPDF caricato: {numero_totale_pagine} pagine totali")
-
-    # Inizializza il modello
-    model = genai.GenerativeModel(modello)
 
     # Lista per memorizzare tutte le risposte
     risposte = []
@@ -73,7 +79,7 @@ def elabora_pdf_con_gemini(percorso_pdf, modello="gemini-2.5-pro", dpi=200):
 
         # Invia a Gemini
         try:
-            response = model.generate_content(messaggio)
+            response = client.models.generate_content(model=modello, contents=messaggio)
             risposte.append({
                 'pagine': f"{pagina_corrente}-{pagina_successiva}",
                 'risposta': response.text

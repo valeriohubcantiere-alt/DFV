@@ -1,5 +1,5 @@
 gradio
-google-generativeai
-pdf2image
+google-genai
+PyMuPDF
 Pillow
 python-dotenv

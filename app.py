@@ -1,28 +1,36 @@
 import gradio as gr
-import google.generativeai as genai
-from pdf2image import convert_from_path
+from google import genai
+import fitz  # PyMuPDF
+from PIL import Image
 from dotenv import load_dotenv
 import os
-import tempfile
+import io
 
 from prompt import PROMPT
 
 load_dotenv()
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 
 def elabora_pdf(pdf_file, modello="gemini-2.5-pro", dpi=200):
     if pdf_file is None:
         return "Carica un file PDF."
 
-    # Converti PDF in immagini
-    immagini = convert_from_path(pdf_file, dpi=dpi)
+    # Converti PDF in immagini con PyMuPDF
+    doc = fitz.open(pdf_file)
+    zoom = dpi / 72
+    matrix = fitz.Matrix(zoom, zoom)
+    immagini = []
+    for page in doc:
+        pix = page.get_pixmap(matrix=matrix)
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        immagini.append(img)
+    doc.close()
     numero_pagine = len(immagini)
 
     if numero_pagine < 2:
         return "Il PDF deve avere almeno 2 pagine per confrontare coppie consecutive."
 
-    model = genai.GenerativeModel(modello)
     righe = []
 
     for i in range(numero_pagine - 1):
@@ -40,7 +48,7 @@ def elabora_pdf(pdf_file, modello="gemini-2.5-pro", dpi=200):
         ]
 
         try:
-            response = model.generate_content(messaggio)
+            response = client.models.generate_content(model=modello, contents=messaggio)
             righe.append(f"Pagine {p1}-{p2}: {response.text}")
         except Exception as e:
             righe.append(f"Pagine {p1}-{p2}: ERRORE - {e}")
