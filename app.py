@@ -11,7 +11,7 @@ load_dotenv()
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
 
-def elabora_pdf(pdf_file, modello="gemini-2.0-flash-exp", dpi=200):
+def elabora_pdf(pdf_file, modello="gemini-2.5-pro", dpi=200):
     if pdf_file is None:
         return "Carica un file PDF."
 

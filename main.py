@@ -27,7 +27,7 @@ def converti_pdf_in_immagini(percorso_pdf, dpi=200):
     return immagini
 
 
-def elabora_pdf_con_gemini(percorso_pdf, modello="gemini-2.0-flash-exp", dpi=200):
+def elabora_pdf_con_gemini(percorso_pdf, modello="gemini-2.5-pro", dpi=200):
     """
     Elabora un PDF inviando coppie di pagine consecutive come immagini a Gemini.
 
