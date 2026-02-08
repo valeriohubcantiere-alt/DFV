@@ -1,14 +1,22 @@
-from google import genai
+import anthropic
 import fitz  # PyMuPDF
 import os
 from PIL import Image
 import io
+import base64
 
-# Configurazione API Gemini
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+# Configurazione API Claude
+client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
 # Importa il prompt dal file esterno
 from prompt import PROMPT
+
+
+def img_to_base64(img):
+    """Converte un'immagine PIL in stringa base64 PNG."""
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.standard_b64encode(buf.getvalue()).decode("utf-8")
 
 
 def converti_pdf_in_immagini(percorso_pdf, dpi=200):
@@ -36,17 +44,17 @@ def converti_pdf_in_immagini(percorso_pdf, dpi=200):
     return immagini
 
 
-def elabora_pdf_con_gemini(percorso_pdf, modello="gemini-2.5-pro", dpi=200):
+def elabora_pdf_con_claude(percorso_pdf, modello="claude-sonnet-4-20250514", dpi=200):
     """
-    Elabora un PDF inviando coppie di pagine consecutive come immagini a Gemini.
+    Elabora un PDF inviando coppie di pagine consecutive come immagini a Claude.
 
     Args:
         percorso_pdf: Path del file PDF
-        modello: Nome del modello Gemini da utilizzare
+        modello: Nome del modello Claude da utilizzare
         dpi: Risoluzione delle immagini
 
     Returns:
-        Lista di risposte da Gemini
+        Lista di risposte da Claude
     """
     # Converti il PDF in immagini
     immagini = converti_pdf_in_immagini(percorso_pdf, dpi)
@@ -68,21 +76,39 @@ def elabora_pdf_con_gemini(percorso_pdf, modello="gemini-2.5-pro", dpi=200):
         img_1 = immagini[i]
         img_2 = immagini[i + 1]
 
-        # Costruisci il messaggio con le immagini
-        messaggio = [
-            PROMPT,
-            f"\n--- PAGINA {pagina_corrente} ---",
-            img_1,
-            f"\n--- PAGINA {pagina_successiva} ---",
-            img_2
+        # Costruisci il messaggio con le immagini in formato Claude
+        content = [
+            {"type": "text", "text": f"\n--- PAGINA {pagina_corrente} ---"},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": img_to_base64(img_1),
+                },
+            },
+            {"type": "text", "text": f"\n--- PAGINA {pagina_successiva} ---"},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": img_to_base64(img_2),
+                },
+            },
         ]
 
-        # Invia a Gemini
+        # Invia a Claude
         try:
-            response = client.models.generate_content(model=modello, contents=messaggio)
+            response = client.messages.create(
+                model=modello,
+                max_tokens=4096,
+                system=PROMPT,
+                messages=[{"role": "user", "content": content}],
+            )
             risposte.append({
                 'pagine': f"{pagina_corrente}-{pagina_successiva}",
-                'risposta': response.text
+                'risposta': response.content[0].text
             })
             print(f"✓ Completato pagine {pagina_corrente}-{pagina_successiva}")
         except Exception as e:
@@ -101,7 +127,7 @@ if __name__ == "__main__":
     pdf_path = "documento.pdf"
 
     # Elabora il PDF
-    risultati = elabora_pdf_con_gemini(pdf_path)
+    risultati = elabora_pdf_con_claude(pdf_path)
 
     # Stampa i risultati
     print("\n" + "=" * 50)
