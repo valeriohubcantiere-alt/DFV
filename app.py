@@ -15,6 +15,19 @@ from service.service_main import carica_tariffario_csv, pulisci_codice
 load_dotenv()
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
+# Precaricamento del tariffario
+TARIFFARIO_NAME = os.environ.get("TARIFFARIO_NAME", "Tariffario2026C")
+TARIFFARIO_PATH = os.environ.get("TARIFFARIO_PATH", "./Tariffario2026C.csv")
+
+if not os.path.exists(TARIFFARIO_PATH):
+    raise FileNotFoundError(
+        f"File tariffario non trovato: {TARIFFARIO_PATH}. "
+        f"Verifica le variabili TARIFFARIO_NAME e TARIFFARIO_PATH nel file .env"
+    )
+
+TARIFFARIO = carica_tariffario_csv(TARIFFARIO_PATH)
+print(f"Tariffario '{TARIFFARIO_NAME}' caricato da {TARIFFARIO_PATH} ({len(TARIFFARIO)} voci)")
+
 
 def img_to_base64(img):
     """Converte un'immagine PIL in stringa base64 PNG."""
@@ -102,23 +115,18 @@ def estrai_codici_da_pdf(pdf_file, modello="claude-sonnet-4-5-20250929", dpi=200
     return lista_finale, log
 
 
-def confronta_pdf_csv(pdf_file, csv_file):
-    """Confronta i codici estratti dal PDF con il Tariffario CSV."""
+def confronta_pdf_csv(pdf_file):
+    """Confronta i codici estratti dal PDF con il Tariffario precaricato."""
     if pdf_file is None:
         return [], "", "Carica un file PDF."
-    if csv_file is None:
-        return [], "", "Carica il file Tariffario2026C.csv."
 
     # 1. Estrai codici dal PDF
     lista_pdf, log_estrazione = estrai_codici_da_pdf(pdf_file)
     if not lista_pdf:
         return [], "", log_estrazione
 
-    # 2. Carica tariffario CSV
-    try:
-        tariffario = carica_tariffario_csv(csv_file)
-    except Exception as e:
-        return [], "", f"Errore lettura CSV: {e}"
+    # 2. Usa tariffario precaricato
+    tariffario = TARIFFARIO
 
     # 3. Confronta usando xcode (codici puliti)
     risultati = []
@@ -167,7 +175,6 @@ demo = gr.Interface(
     fn=confronta_pdf_csv,
     inputs=[
         gr.File(label="Carica PDF (computo metrico)", file_types=[".pdf"]),
-        gr.File(label="Carica Tariffario2026C.csv", file_types=[".csv"]),
     ],
     outputs=[
         gr.Dataframe(
@@ -177,11 +184,12 @@ demo = gr.Interface(
         gr.Textbox(label="Output in linea", lines=10),
         gr.Textbox(label="Log", lines=2),
     ],
-    title="Confronto PDF ↔ Tariffario 2026",
+    title=f"Confronto PDF ↔ {TARIFFARIO_NAME}",
     description=(
-        "Carica un computo metrico in PDF e il file Tariffario2026C.csv. "
-        "Il sistema estrae i codici dal PDF, li confronta (tramite xcode pulito) "
-        "con il tariffario e restituisce: codice, descrizione, unità, prezzo unitario, quantità e costo totale."
+        f"Carica un computo metrico in PDF. "
+        f"Il tariffario '{TARIFFARIO_NAME}' è precaricato ({len(TARIFFARIO)} voci). "
+        f"Il sistema estrae i codici dal PDF, li confronta (tramite xcode pulito) "
+        f"con il tariffario e restituisce: codice, descrizione, unità, prezzo unitario, quantità e costo totale."
     ),
 )
 

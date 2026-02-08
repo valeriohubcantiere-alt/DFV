@@ -7,3 +7,4 @@ risultati.txt
 .venv/
 venv/
 service/Prezziari
+*.csv
