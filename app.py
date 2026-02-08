@@ -38,7 +38,7 @@ def parse_liste_da_testo(testo):
     return sorted(unici)
 
 
-def elabora_pdf(pdf_file, modello="claude-sonnet-4-20250514", dpi=200):
+def elabora_pdf(pdf_file, modello="claude-sonnet-4-5-20250929", dpi=200):
     if pdf_file is None:
         return [], "Carica un file PDF."
 
