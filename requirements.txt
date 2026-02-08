@@ -1,5 +1,5 @@
 gradio
-google-genai
+anthropic
 PyMuPDF
 Pillow
 python-dotenv

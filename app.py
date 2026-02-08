@@ -1,5 +1,5 @@
 import gradio as gr
-from google import genai
+import anthropic
 import fitz  # PyMuPDF
 from PIL import Image
 from dotenv import load_dotenv
@@ -7,15 +7,23 @@ import os
 import io
 import re
 import ast
+import base64
 
 from prompt import PROMPT
 
 load_dotenv()
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+
+
+def img_to_base64(img):
+    """Converte un'immagine PIL in stringa base64 PNG."""
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.standard_b64encode(buf.getvalue()).decode("utf-8")
 
 
 def parse_liste_da_testo(testo):
-    """Estrae liste di tuple dal testo restituito da Gemini (logica di main2.py)."""
+    """Estrae liste di tuple dal testo restituito da Claude."""
     matches = re.findall(r'\[.*?\]', testo, re.DOTALL)
     tutte = []
     for match in matches:
@@ -30,7 +38,7 @@ def parse_liste_da_testo(testo):
     return sorted(unici)
 
 
-def elabora_pdf(pdf_file, modello="gemini-2.5-pro", dpi=200):
+def elabora_pdf(pdf_file, modello="claude-sonnet-4-20250514", dpi=200):
     if pdf_file is None:
         return [], "Carica un file PDF."
 
@@ -57,17 +65,35 @@ def elabora_pdf(pdf_file, modello="gemini-2.5-pro", dpi=200):
         img_1 = immagini[i]
         img_2 = immagini[i + 1]
 
-        messaggio = [
-            PROMPT,
-            f"\n--- PAGINA {p1} ---",
-            img_1,
-            f"\n--- PAGINA {p2} ---",
-            img_2,
+        content = [
+            {"type": "text", "text": f"\n--- PAGINA {p1} ---"},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": img_to_base64(img_1),
+                },
+            },
+            {"type": "text", "text": f"\n--- PAGINA {p2} ---"},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": img_to_base64(img_2),
+                },
+            },
         ]
 
         try:
-            response = client.models.generate_content(model=modello, contents=messaggio)
-            risposte_raw.append(response.text)
+            response = client.messages.create(
+                model=modello,
+                max_tokens=4096,
+                system=PROMPT,
+                messages=[{"role": "user", "content": content}],
+            )
+            risposte_raw.append(response.content[0].text)
         except Exception as e:
             risposte_raw.append(f"ERRORE pagine {p1}-{p2}: {e}")
 
@@ -90,7 +116,7 @@ demo = gr.Interface(
         gr.Textbox(label="Log", lines=2),
     ],
     title="Estrazione Codici Tariffario da PDF",
-    description="Carica un computo metrico in PDF. Il sistema analizza coppie di pagine consecutive con Gemini, estrae i codici tariffario e le quantità, e restituisce una lista unica e ordinata.",
+    description="Carica un computo metrico in PDF. Il sistema analizza coppie di pagine consecutive con Claude, estrae i codici tariffario e le quantità, e restituisce una lista unica e ordinata.",
 )
 
 if __name__ == "__main__":

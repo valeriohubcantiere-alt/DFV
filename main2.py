@@ -1,4 +1,4 @@
-example_test= """Pagine 1-2: Certamente. Analizzando il documento, ho estratto i codici del tariffario e le relative quantità totali per ogni voce.
+example_test= """Pagine 1-2: Analizzando il documento, ho estratto i codici del tariffario e le relative quantità totali per ogni voce.
 
 Ho ricostruito i codici che erano divisi su più righe, unendoli per creare la stringa completa. Le quantità sono state convertite in formato numerico.
 
