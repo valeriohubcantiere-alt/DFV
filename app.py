@@ -5,6 +5,8 @@ from PIL import Image
 from dotenv import load_dotenv
 import os
 import io
+import re
+import ast
 
 from prompt import PROMPT
 
@@ -12,9 +14,25 @@ load_dotenv()
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 
+def parse_liste_da_testo(testo):
+    """Estrae liste di tuple dal testo restituito da Gemini (logica di main2.py)."""
+    matches = re.findall(r'\[.*?\]', testo, re.DOTALL)
+    tutte = []
+    for match in matches:
+        try:
+            data = ast.literal_eval(match)
+            tutte.extend(data)
+        except (ValueError, SyntaxError):
+            continue
+    # Rimuovi duplicati mantenendo l'ordine, poi ordina
+    seen = set()
+    unici = [x for x in tutte if not (x in seen or seen.add(x))]
+    return sorted(unici)
+
+
 def elabora_pdf(pdf_file, modello="gemini-2.5-pro", dpi=200):
     if pdf_file is None:
-        return "Carica un file PDF."
+        return [], "Carica un file PDF."
 
     # Converti PDF in immagini con PyMuPDF
     doc = fitz.open(pdf_file)
@@ -29,9 +47,9 @@ def elabora_pdf(pdf_file, modello="gemini-2.5-pro", dpi=200):
     numero_pagine = len(immagini)
 
     if numero_pagine < 2:
-        return "Il PDF deve avere almeno 2 pagine per confrontare coppie consecutive."
+        return [], "Il PDF deve avere almeno 2 pagine per confrontare coppie consecutive."
 
-    righe = []
+    risposte_raw = []
 
     for i in range(numero_pagine - 1):
         p1 = i + 1
@@ -49,19 +67,30 @@ def elabora_pdf(pdf_file, modello="gemini-2.5-pro", dpi=200):
 
         try:
             response = client.models.generate_content(model=modello, contents=messaggio)
-            righe.append(f"Pagine {p1}-{p2}: {response.text}")
+            risposte_raw.append(response.text)
         except Exception as e:
-            righe.append(f"Pagine {p1}-{p2}: ERRORE - {e}")
+            risposte_raw.append(f"ERRORE pagine {p1}-{p2}: {e}")
 
-    return "\n\n".join(righe)
+    testo_completo = "\n".join(risposte_raw)
+    lista_finale = parse_liste_da_testo(testo_completo)
+
+    # Prepara dati per la tabella: lista di [codice, quantità]
+    tabella = [[codice, quantita] for codice, quantita in lista_finale]
+
+    log = f"Pagine analizzate: {numero_pagine} | Coppie elaborate: {numero_pagine - 1} | Voci estratte: {len(lista_finale)}"
+
+    return tabella, log
 
 
 demo = gr.Interface(
     fn=elabora_pdf,
     inputs=gr.File(label="Carica PDF", file_types=[".pdf"]),
-    outputs=gr.Textbox(label="Risultati", lines=20),
-    title="Analisi PDF con Gemini",
-    description=f"Carica un PDF. Ogni coppia di pagine consecutive viene analizzata con il prompt:\n\n**{PROMPT}**",
+    outputs=[
+        gr.Dataframe(headers=["Codice Tariffario", "Quantità"], label="Risultati"),
+        gr.Textbox(label="Log", lines=2),
+    ],
+    title="Estrazione Codici Tariffario da PDF",
+    description="Carica un computo metrico in PDF. Il sistema analizza coppie di pagine consecutive con Gemini, estrae i codici tariffario e le quantità, e restituisce una lista unica e ordinata.",
 )
 
 if __name__ == "__main__":
