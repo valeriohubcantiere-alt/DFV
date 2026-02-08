@@ -1,9 +1,30 @@
 import os
+import re
 
 SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
 DIR = os.path.dirname(SERVICE_DIR)
 PATH_PREZZIARI = os.path.join(DIR, "Prezziari")
 OUTPUT_DIR = os.path.join(DIR, "output")
+
+
+def lista_regioni() -> list[str]:
+    """
+    Legge la cartella Prezziari e restituisce la lista delle regioni disponibili
+    (sottocartelle presenti).
+    """
+    if not os.path.exists(PATH_PREZZIARI):
+        raise FileNotFoundError(f"Cartella Prezziari non trovata: {PATH_PREZZIARI}")
+
+    regioni = [
+        nome for nome in sorted(os.listdir(PATH_PREZZIARI))
+        if os.path.isdir(os.path.join(PATH_PREZZIARI, nome))
+    ]
+
+    if not regioni:
+        raise ValueError("Nessuna regione trovata nella cartella Prezziari")
+
+    return regioni
+
 
 def carica_tariffario_regione(nome_regione: str) -> dict:
     """
