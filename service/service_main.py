@@ -1,6 +1,7 @@
 import os
 import re
 import csv
+from difflib import SequenceMatcher
 
 SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
 DIR = os.path.dirname(SERVICE_DIR)
@@ -19,6 +20,75 @@ def pulisci_codice(codice: str) -> str:
     c = re.sub(r'\s+', '', c)
     c = c.upper()
     return c
+
+
+def normalizza_codice(codice: str) -> str:
+    """
+    Normalizzazione aggressiva di un codice tariffario per il confronto fuzzy.
+    Converte tutti i separatori (underscore, trattini) in punti,
+    rimuove spazi, normalizza in uppercase, e rimuove punti duplicati.
+    """
+    if not codice:
+        return ""
+    c = codice.strip()
+    c = re.sub(r'\s+', '', c)
+    c = c.upper()
+    # Converti underscore e trattini in punti
+    c = c.replace('_', '.').replace('-', '.')
+    # Rimuovi punti duplicati consecutivi
+    c = re.sub(r'\.{2,}', '.', c)
+    # Rimuovi punto iniziale o finale
+    c = c.strip('.')
+    return c
+
+
+def trova_codice_simile(
+    xcode: str,
+    tariffario: dict,
+    tariffario_norm: dict | None = None,
+    soglia: float = 0.85,
+) -> str | None:
+    """
+    Cerca un codice simile nel tariffario usando similarita' di stringa.
+    Prova prima con normalizzazione aggressiva (O(1) se tariffario_norm fornito),
+    poi con SequenceMatcher come fallback.
+
+    Args:
+        xcode: codice pulito da cercare
+        tariffario: dizionario {xcode: voce}
+        tariffario_norm: mappa precomputata {codice_normalizzato: chiave_xcode} (opzionale)
+        soglia: soglia minima di similarita' per il match fuzzy (default 0.85)
+
+    Returns:
+        La chiave xcode del tariffario che corrisponde, o None.
+    """
+    xcode_norm = normalizza_codice(xcode)
+
+    # 1. Match con normalizzazione aggressiva
+    if tariffario_norm is not None:
+        # Lookup O(1) con mappa precomputata
+        if xcode_norm in tariffario_norm:
+            return tariffario_norm[xcode_norm]
+    else:
+        # Fallback: scansione lineare
+        for chiave_tariffario in tariffario:
+            if normalizza_codice(chiave_tariffario) == xcode_norm:
+                return chiave_tariffario
+
+    # 2. Fallback: similarita' di stringa (SequenceMatcher)
+    miglior_match = None
+    miglior_score = 0.0
+
+    for chiave_tariffario in tariffario:
+        score = SequenceMatcher(None, xcode_norm, normalizza_codice(chiave_tariffario)).ratio()
+        if score > miglior_score:
+            miglior_score = score
+            miglior_match = chiave_tariffario
+
+    if miglior_score >= soglia:
+        return miglior_match
+
+    return None
 
 
 def _trova_colonna(headers, possibili_nomi):
