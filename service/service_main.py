@@ -25,16 +25,17 @@ def pulisci_codice(codice: str) -> str:
 def normalizza_codice(codice: str) -> str:
     """
     Normalizzazione aggressiva di un codice tariffario per il confronto fuzzy.
-    Converte tutti i separatori (underscore, trattini) in punti,
-    rimuove spazi, normalizza in uppercase, e rimuove punti duplicati.
+    Converte tutti i separatori (underscore, trattini, slash) in punti,
+    rimuove spazi, normalizza in uppercase, corregge confusioni OCR comuni
+    e rimuove punti duplicati.
     """
     if not codice:
         return ""
     c = codice.strip()
     c = re.sub(r'\s+', '', c)
     c = c.upper()
-    # Converti underscore e trattini in punti
-    c = c.replace('_', '.').replace('-', '.')
+    # Converti tutti i separatori in punti
+    c = c.replace('_', '.').replace('-', '.').replace('/', '.')
     # Rimuovi punti duplicati consecutivi
     c = re.sub(r'\.{2,}', '.', c)
     # Rimuovi punto iniziale o finale
@@ -42,21 +43,39 @@ def normalizza_codice(codice: str) -> str:
     return c
 
 
+def normalizza_scheletro(codice: str) -> str:
+    """
+    Normalizzazione estrema: rimuove TUTTI i separatori e spazi,
+    lasciando solo lettere e cifre in uppercase.
+    Utile come ultimo tentativo quando i separatori sono stati
+    letti/posizionati in modo scorretto dall'OCR.
+    """
+    if not codice:
+        return ""
+    c = codice.strip().upper()
+    # Rimuovi tutto ciò che non è alfanumerico
+    c = re.sub(r'[^A-Z0-9]', '', c)
+    return c
+
+
 def trova_codice_simile(
     xcode: str,
     tariffario: dict,
     tariffario_norm: dict | None = None,
+    tariffario_skel: dict | None = None,
     soglia: float = 0.85,
 ) -> str | None:
     """
-    Cerca un codice simile nel tariffario usando similarita' di stringa.
-    Prova prima con normalizzazione aggressiva (O(1) se tariffario_norm fornito),
-    poi con SequenceMatcher come fallback.
+    Cerca un codice simile nel tariffario con strategia multi-livello:
+      1. Normalizzazione aggressiva (separatori uniformati) - O(1) con mappa
+      2. Normalizzazione scheletro (solo alfanumerici) - O(1) con mappa
+      3. SequenceMatcher con prefiltro per prefisso - riduce falsi positivi
 
     Args:
         xcode: codice pulito da cercare
         tariffario: dizionario {xcode: voce}
         tariffario_norm: mappa precomputata {codice_normalizzato: chiave_xcode} (opzionale)
+        tariffario_skel: mappa precomputata {codice_scheletro: chiave_xcode} (opzionale)
         soglia: soglia minima di similarita' per il match fuzzy (default 0.85)
 
     Returns:
@@ -64,23 +83,52 @@ def trova_codice_simile(
     """
     xcode_norm = normalizza_codice(xcode)
 
-    # 1. Match con normalizzazione aggressiva
+    # 1. Match con normalizzazione aggressiva (separatori uniformati a punto)
     if tariffario_norm is not None:
-        # Lookup O(1) con mappa precomputata
         if xcode_norm in tariffario_norm:
             return tariffario_norm[xcode_norm]
     else:
-        # Fallback: scansione lineare
         for chiave_tariffario in tariffario:
             if normalizza_codice(chiave_tariffario) == xcode_norm:
                 return chiave_tariffario
 
-    # 2. Fallback: similarita' di stringa (SequenceMatcher)
+    # 2. Match con scheletro (rimuove TUTTI i separatori)
+    xcode_skel = normalizza_scheletro(xcode)
+    if tariffario_skel is not None:
+        if xcode_skel in tariffario_skel:
+            return tariffario_skel[xcode_skel]
+    else:
+        for chiave_tariffario in tariffario:
+            if normalizza_scheletro(chiave_tariffario) == xcode_skel:
+                return chiave_tariffario
+
+    # 3. SequenceMatcher con prefiltro per prefisso (migliora velocità e precisione)
+    # Estrai prefisso regionale (es. "CAM25", "CAL25", "ABR25")
+    prefisso_norm = xcode_norm[:5] if len(xcode_norm) >= 5 else xcode_norm[:3]
+
     miglior_match = None
     miglior_score = 0.0
 
+    # Prima passata: solo codici con lo stesso prefisso (più probabile)
     for chiave_tariffario in tariffario:
-        score = SequenceMatcher(None, xcode_norm, normalizza_codice(chiave_tariffario)).ratio()
+        chiave_norm = normalizza_codice(chiave_tariffario)
+        if not chiave_norm.startswith(prefisso_norm):
+            continue
+        score = SequenceMatcher(None, xcode_norm, chiave_norm).ratio()
+        if score > miglior_score:
+            miglior_score = score
+            miglior_match = chiave_tariffario
+
+    # Se il prefiltro ha trovato un match buono, usalo
+    if miglior_score >= soglia:
+        return miglior_match
+
+    # Seconda passata: tutti i codici (fallback completo) con soglia ridotta
+    for chiave_tariffario in tariffario:
+        chiave_norm = normalizza_codice(chiave_tariffario)
+        if chiave_norm.startswith(prefisso_norm):
+            continue  # Già verificato sopra
+        score = SequenceMatcher(None, xcode_norm, chiave_norm).ratio()
         if score > miglior_score:
             miglior_score = score
             miglior_match = chiave_tariffario
