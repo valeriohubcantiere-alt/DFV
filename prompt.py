@@ -27,3 +27,44 @@ Esempio:
 [("CAM25_29.392.038", 400.00), ("CAM25_83.293.001.a", 250.00)]
 ```
 """
+
+
+SYSTEM_ANALISI_FINALE = "Sei un analizzatore di dati di computi metrici. Rispondi SOLO con il JSON richiesto, senza testo aggiuntivo."
+
+
+def build_prompt_analisi_finale(testo_risultati, testo_non_trovati, testo_tariffario):
+    """
+    Costruisce il prompt per l'analisi finale di deduplicazione e inserimento voci mancanti.
+
+    Args:
+        testo_risultati: stringa con i risultati attuali formattati
+        testo_non_trovati: stringa con i codici non trovati e relative qty
+        testo_tariffario: stringa con le voci tariffario simili ai codici non trovati
+    """
+    return f"""Analizza i seguenti risultati estratti da un computo metrico PDF e confrontati con un tariffario.
+
+RISULTATI ATTUALI:
+{testo_risultati}
+
+CODICI NON TROVATI NEL TARIFFARIO (da cercare e inserire):
+{testo_non_trovati}
+
+VOCI TARIFFARIO DISPONIBILI PER I CODICI NON TROVATI:
+{testo_tariffario}
+
+ISTRUZIONI:
+1. DOPPIONI: Se trovi codici duplicati (stesso codice che appare più volte), tieni SOLO quello con la quantità più alta e rimuovi gli altri.
+2. VOCI MANCANTI: Per ogni codice nella lista "NON TROVATI", cerca tra le "VOCI TARIFFARIO DISPONIBILI" la corrispondenza più probabile (potrebbe differire per un carattere, punto vs underscore, lettera maiuscola/minuscola, ecc.). Se trovi una corrispondenza, aggiungilo ai risultati copiando descrizione, unità e prezzo dal tariffario e usando la quantità indicata nel codice non trovato. Se non trovi corrispondenza, lascialo come non trovato.
+3. NON MODIFICARE le voci già correttamente inserite nei risultati (non cambiare quantità, descrizione o prezzo delle voci esistenti).
+
+FORMATO OUTPUT — rispondi ESCLUSIVAMENTE con un JSON valido, senza testo aggiuntivo prima o dopo:
+
+```json
+{{
+  "risultati": [
+    ["codice", "descrizione", "unità", prezzo, quantità, costo_totale],
+    ...
+  ],
+  "non_trovati": ["codice1", "codice2", ...]
+}}
+```"""

@@ -7,10 +7,11 @@ import os
 import io
 import re
 import ast
+import json
 import base64
 import time
 
-from prompt import PROMPT
+from prompt import PROMPT, SYSTEM_ANALISI_FINALE, build_prompt_analisi_finale
 from service.service_main import carica_tariffario_csv, pulisci_codice, normalizza_codice, trova_codice_simile
 
 
@@ -223,33 +224,7 @@ def analisi_finale_claude(risultati, non_trovati, tariffario, modello="claude-so
                 )
     testo_tariffario = "\n".join(codici_tariffario_sample) if codici_tariffario_sample else "(nessun codice simile trovato)"
 
-    prompt_analisi = f"""Analizza i seguenti risultati estratti da un computo metrico PDF e confrontati con un tariffario.
-
-RISULTATI ATTUALI:
-{testo_risultati}
-
-CODICI NON TROVATI NEL TARIFFARIO:
-{testo_non_trovati}
-
-VOCI TARIFFARIO SIMILI AI CODICI NON TROVATI:
-{testo_tariffario}
-
-ISTRUZIONI:
-1. DOPPIONI: Se trovi codici duplicati (stesso codice che appare più volte), tieni SOLO quello con la quantità più alta e rimuovi gli altri.
-2. VOCI MANCANTI: Per i codici non trovati, cerca tra le voci del tariffario simili se c'è una corrispondenza. Se sì, inseriscili copiando descrizione, unità e prezzo dal tariffario. Se non trovi corrispondenza, lasciali come non trovati.
-3. NON MODIFICARE le voci già correttamente inserite nei risultati (non cambiare quantità, descrizione o prezzo delle voci esistenti).
-
-FORMATO OUTPUT — rispondi ESCLUSIVAMENTE con due liste Python, senza testo aggiuntivo:
-
-RISULTATI:
-```python
-[("codice", "descrizione", "unità", prezzo, quantità, costo_totale), ...]
-```
-
-NON_TROVATI:
-```python
-["codice1", "codice2", ...]
-```"""
+    prompt_analisi = build_prompt_analisi_finale(testo_risultati, testo_non_trovati, testo_tariffario)
 
     log("  Invio dati a Claude per analisi finale...")
 
@@ -257,45 +232,49 @@ NON_TROVATI:
         response = client.messages.create(
             model=modello,
             max_tokens=8192,
-            system="Sei un analizzatore di dati di computi metrici. Rispondi SOLO con le liste Python richieste.",
+            system=SYSTEM_ANALISI_FINALE,
             messages=[{"role": "user", "content": prompt_analisi}],
         )
         testo_risposta = response.content[0].text
         log("  Risposta ricevuta da Claude")
 
-        # Parse risultati aggiornati
-        # Cerca il blocco RISULTATI
+        # Parse JSON dalla risposta
         risultati_nuovi = []
         non_trovati_nuovi = []
 
-        blocchi = re.findall(r'```python\s*(.*?)```', testo_risposta, re.DOTALL)
+        # Cerca blocco JSON (con o senza ```json)
+        json_match = re.search(r'```json\s*(.*?)```', testo_risposta, re.DOTALL)
+        json_str = json_match.group(1).strip() if json_match else testo_risposta.strip()
 
-        if len(blocchi) >= 1:
-            try:
-                data_risultati = ast.literal_eval(blocchi[0].strip())
-                if isinstance(data_risultati, list):
-                    for item in data_risultati:
-                        if isinstance(item, (tuple, list)) and len(item) == 6:
-                            risultati_nuovi.append([
-                                str(item[0]),
-                                str(item[1]),
-                                str(item[2]),
-                                float(item[3]),
-                                float(item[4]),
-                                float(item[5]),
-                            ])
-            except (ValueError, SyntaxError) as e:
-                log(f"  ERRORE parsing risultati da Claude: {e}")
-                log("  Mantengo i risultati originali")
-                return risultati, [c for c, _ in non_trovati]
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            log(f"  ERRORE parsing JSON da Claude: {e}")
+            log(f"  Risposta ricevuta: {testo_risposta[:200]}...")
+            log("  Mantengo i risultati originali")
+            return risultati, [c for c, _ in non_trovati]
 
-        if len(blocchi) >= 2:
-            try:
-                data_nt = ast.literal_eval(blocchi[1].strip())
-                if isinstance(data_nt, list):
-                    non_trovati_nuovi = [str(c) for c in data_nt]
-            except (ValueError, SyntaxError):
-                non_trovati_nuovi = [c for c, _ in non_trovati]
+        if "risultati" in data and isinstance(data["risultati"], list):
+            for item in data["risultati"]:
+                if isinstance(item, (list, tuple)) and len(item) == 6:
+                    risultati_nuovi.append([
+                        str(item[0]),
+                        str(item[1]),
+                        str(item[2]),
+                        float(item[3]),
+                        float(item[4]),
+                        float(item[5]),
+                    ])
+
+        if "non_trovati" in data and isinstance(data["non_trovati"], list):
+            non_trovati_nuovi = [str(c) for c in data["non_trovati"]]
+        else:
+            non_trovati_nuovi = [c for c, _ in non_trovati]
+
+        # Se il parsing JSON ha funzionato ma risultati è vuoto, mantieni gli originali
+        if not risultati_nuovi and risultati:
+            log("  ATTENZIONE: parsing JSON ha prodotto risultati vuoti, mantengo gli originali")
+            return risultati, [c for c, _ in non_trovati]
 
         # Log delle modifiche
         diff_count = len(risultati) - len(risultati_nuovi)
