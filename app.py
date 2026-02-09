@@ -8,9 +8,16 @@ import io
 import re
 import ast
 import base64
+import time
 
 from prompt import PROMPT
 from service.service_main import carica_tariffario_csv, pulisci_codice, normalizza_codice, trova_codice_simile
+
+
+def log(msg):
+    """Stampa un messaggio di log con timestamp."""
+    timestamp = time.strftime("%H:%M:%S")
+    print(f"[{timestamp}] {msg}")
 
 load_dotenv()
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
@@ -25,6 +32,7 @@ if not os.path.exists(TARIFFARIO_PATH):
         f"Verifica le variabili TARIFFARIO_NAME e TARIFFARIO_PATH nel file .env"
     )
 
+log(f"Caricamento tariffario '{TARIFFARIO_NAME}' da {TARIFFARIO_PATH}...")
 TARIFFARIO = carica_tariffario_csv(TARIFFARIO_PATH)
 # Precomputa mappa normalizzata: {codice_normalizzato: chiave_xcode}
 TARIFFARIO_NORM = {}
@@ -32,7 +40,7 @@ for xcode_key in TARIFFARIO:
     norm_key = normalizza_codice(xcode_key)
     if norm_key not in TARIFFARIO_NORM:
         TARIFFARIO_NORM[norm_key] = xcode_key
-print(f"Tariffario '{TARIFFARIO_NAME}' caricato da {TARIFFARIO_PATH} ({len(TARIFFARIO)} voci)")
+log(f"Tariffario '{TARIFFARIO_NAME}' caricato: {len(TARIFFARIO)} voci")
 
 
 def img_to_base64(img):
@@ -83,27 +91,46 @@ def parse_liste_da_testo(testo):
 
 def estrai_codici_da_pdf(pdf_file, modello="claude-sonnet-4-5-20250929", dpi=200):
     """Estrae coppie (codice, quantità) dal PDF usando Claude."""
+    log("=" * 60)
+    log("INIZIO ELABORAZIONE PDF")
+    log("=" * 60)
+
+    log(f"Apertura PDF: {pdf_file}")
     doc = fitz.open(pdf_file)
     zoom = dpi / 72
     matrix = fitz.Matrix(zoom, zoom)
     immagini = []
-    for page in doc:
+    numero_pagine = len(doc)
+    log(f"PDF aperto: {numero_pagine} pagine trovate")
+
+    log("Conversione pagine in immagini...")
+    for idx, page in enumerate(doc):
+        num_pag = idx + 1
+        log(f"  Lettura pagina {num_pag}/{numero_pagine}...")
         pix = page.get_pixmap(matrix=matrix)
         img = Image.open(io.BytesIO(pix.tobytes("png")))
         immagini.append(img)
     doc.close()
-    numero_pagine = len(immagini)
+    log(f"Conversione completata: {numero_pagine} immagini generate ({dpi} DPI)")
 
     if numero_pagine < 2:
+        log("ERRORE: il PDF deve avere almeno 2 pagine.")
         return [], "Il PDF deve avere almeno 2 pagine."
 
     risposte_raw = []
+    coppie_totali = numero_pagine - 1
 
-    for i in range(numero_pagine - 1):
+    log("-" * 60)
+    log(f"ANALISI CODICI CON CLAUDE ({coppie_totali} coppie di pagine)")
+    log("-" * 60)
+
+    for i in range(coppie_totali):
         p1 = i + 1
         p2 = i + 2
         img_1 = immagini[i]
         img_2 = immagini[i + 1]
+
+        log(f"  Invio coppia pagine {p1}-{p2} a Claude... [{i + 1}/{coppie_totali}]")
 
         content = [
             {"type": "text", "text": f"\n--- PAGINA {p1} ---"},
@@ -133,15 +160,164 @@ def estrai_codici_da_pdf(pdf_file, modello="claude-sonnet-4-5-20250929", dpi=200
                 system=PROMPT,
                 messages=[{"role": "user", "content": content}],
             )
-            risposte_raw.append(response.content[0].text)
+            testo_risposta = response.content[0].text
+            risposte_raw.append(testo_risposta)
+            # Conta voci estratte da questa coppia
+            voci_coppia = len(re.findall(r'\(', testo_risposta.split('[')[-1])) if '[' in testo_risposta else 0
+            log(f"  Risposta ricevuta per pagine {p1}-{p2} (~{voci_coppia} voci)")
         except Exception as e:
+            log(f"  ERRORE pagine {p1}-{p2}: {e}")
             risposte_raw.append(f"ERRORE pagine {p1}-{p2}: {e}")
+
+    log("-" * 60)
+    log("AGGREGAZIONE RISULTATI")
+    log("-" * 60)
 
     testo_completo = "\n".join(risposte_raw)
     lista_finale = parse_liste_da_testo(testo_completo)
 
-    log = f"Pagine: {numero_pagine} | Coppie elaborate: {numero_pagine - 1} | Voci estratte: {len(lista_finale)}"
-    return lista_finale, log
+    log(f"Voci estratte dopo aggregazione: {len(lista_finale)}")
+
+    log_str = f"Pagine: {numero_pagine} | Coppie elaborate: {coppie_totali} | Voci estratte: {len(lista_finale)}"
+    return lista_finale, log_str
+
+
+def analisi_finale_claude(risultati, non_trovati, tariffario, modello="claude-sonnet-4-5-20250929"):
+    """
+    Chiede a Claude di analizzare i risultati finali per:
+    1. Trovare e rimuovere doppioni (tiene la quantità più alta)
+    2. Inserire voci mancanti copiando la descrizione dal tariffario
+    Non modifica le voci già correttamente inserite.
+    """
+    log("-" * 60)
+    log("ANALISI FINALE CON CLAUDE (deduplicazione e voci mancanti)")
+    log("-" * 60)
+
+    if not risultati and not non_trovati:
+        log("  Nessun dato da analizzare")
+        return risultati, []
+
+    # Prepara i dati per Claude
+    righe_risultati = []
+    for r in risultati:
+        righe_risultati.append(
+            f"  Codice: {r[0]} | Descrizione: {r[1]} | Unità: {r[2]} | Prezzo: {r[3]} | Qty: {r[4]} | Totale: {r[5]}"
+        )
+    testo_risultati = "\n".join(righe_risultati) if righe_risultati else "(nessuno)"
+
+    righe_non_trovati = []
+    for codice, qty in non_trovati:
+        righe_non_trovati.append(f"  {codice} (qty: {qty})")
+    testo_non_trovati = "\n".join(righe_non_trovati) if righe_non_trovati else "(nessuno)"
+
+    # Prepara un estratto del tariffario con i codici più simili ai non trovati
+    codici_tariffario_sample = []
+    for codice_nt, _ in non_trovati:
+        xcode = pulisci_codice(codice_nt)
+        # Prendi i primi caratteri come prefisso per filtrare
+        prefisso = xcode[:6] if len(xcode) >= 6 else xcode
+        for chiave, voce in tariffario.items():
+            if chiave.startswith(prefisso) and len(codici_tariffario_sample) < 50:
+                codici_tariffario_sample.append(
+                    f"  {voce['codice']} | {voce['descrizione']} | {voce['unita']} | {voce['prezzo']}"
+                )
+    testo_tariffario = "\n".join(codici_tariffario_sample) if codici_tariffario_sample else "(nessun codice simile trovato)"
+
+    prompt_analisi = f"""Analizza i seguenti risultati estratti da un computo metrico PDF e confrontati con un tariffario.
+
+RISULTATI ATTUALI:
+{testo_risultati}
+
+CODICI NON TROVATI NEL TARIFFARIO:
+{testo_non_trovati}
+
+VOCI TARIFFARIO SIMILI AI CODICI NON TROVATI:
+{testo_tariffario}
+
+ISTRUZIONI:
+1. DOPPIONI: Se trovi codici duplicati (stesso codice che appare più volte), tieni SOLO quello con la quantità più alta e rimuovi gli altri.
+2. VOCI MANCANTI: Per i codici non trovati, cerca tra le voci del tariffario simili se c'è una corrispondenza. Se sì, inseriscili copiando descrizione, unità e prezzo dal tariffario. Se non trovi corrispondenza, lasciali come non trovati.
+3. NON MODIFICARE le voci già correttamente inserite nei risultati (non cambiare quantità, descrizione o prezzo delle voci esistenti).
+
+FORMATO OUTPUT — rispondi ESCLUSIVAMENTE con due liste Python, senza testo aggiuntivo:
+
+RISULTATI:
+```python
+[("codice", "descrizione", "unità", prezzo, quantità, costo_totale), ...]
+```
+
+NON_TROVATI:
+```python
+["codice1", "codice2", ...]
+```"""
+
+    log("  Invio dati a Claude per analisi finale...")
+
+    try:
+        response = client.messages.create(
+            model=modello,
+            max_tokens=8192,
+            system="Sei un analizzatore di dati di computi metrici. Rispondi SOLO con le liste Python richieste.",
+            messages=[{"role": "user", "content": prompt_analisi}],
+        )
+        testo_risposta = response.content[0].text
+        log("  Risposta ricevuta da Claude")
+
+        # Parse risultati aggiornati
+        # Cerca il blocco RISULTATI
+        risultati_nuovi = []
+        non_trovati_nuovi = []
+
+        blocchi = re.findall(r'```python\s*(.*?)```', testo_risposta, re.DOTALL)
+
+        if len(blocchi) >= 1:
+            try:
+                data_risultati = ast.literal_eval(blocchi[0].strip())
+                if isinstance(data_risultati, list):
+                    for item in data_risultati:
+                        if isinstance(item, (tuple, list)) and len(item) == 6:
+                            risultati_nuovi.append([
+                                str(item[0]),
+                                str(item[1]),
+                                str(item[2]),
+                                float(item[3]),
+                                float(item[4]),
+                                float(item[5]),
+                            ])
+            except (ValueError, SyntaxError) as e:
+                log(f"  ERRORE parsing risultati da Claude: {e}")
+                log("  Mantengo i risultati originali")
+                return risultati, [c for c, _ in non_trovati]
+
+        if len(blocchi) >= 2:
+            try:
+                data_nt = ast.literal_eval(blocchi[1].strip())
+                if isinstance(data_nt, list):
+                    non_trovati_nuovi = [str(c) for c in data_nt]
+            except (ValueError, SyntaxError):
+                non_trovati_nuovi = [c for c, _ in non_trovati]
+
+        # Log delle modifiche
+        diff_count = len(risultati) - len(risultati_nuovi)
+        if diff_count > 0:
+            log(f"  Rimossi {diff_count} doppioni")
+        elif diff_count < 0:
+            log(f"  Aggiunte {-diff_count} voci mancanti")
+
+        if len(non_trovati_nuovi) < len(non_trovati):
+            recuperati = len(non_trovati) - len(non_trovati_nuovi)
+            log(f"  Recuperate {recuperati} voci dai codici non trovati")
+
+        if non_trovati_nuovi:
+            log(f"  Ancora non trovati: {len(non_trovati_nuovi)} codici")
+
+        log("  Analisi finale completata")
+        return risultati_nuovi, non_trovati_nuovi
+
+    except Exception as e:
+        log(f"  ERRORE nella chiamata a Claude: {e}")
+        log("  Mantengo i risultati originali")
+        return risultati, [c for c, _ in non_trovati]
 
 
 def confronta_pdf_csv(pdf_file):
@@ -158,6 +334,10 @@ def confronta_pdf_csv(pdf_file):
     tariffario = TARIFFARIO
 
     # 3. Confronta usando xcode (codici puliti) con fallback fuzzy
+    log("-" * 60)
+    log("CONFRONTO CON TARIFFARIO")
+    log("-" * 60)
+
     risultati = []
     non_trovati = []
     match_fuzzy = []
@@ -177,8 +357,10 @@ def confronta_pdf_csv(pdf_file):
                 quantita,
                 costo_totale,
             ])
+            log(f"  Match esatto: {codice_pdf} -> {voce['codice']}")
         else:
             # Fallback: fuzzy matching
+            log(f"  Ricerca fuzzy per: {codice_pdf}...")
             chiave_simile = trova_codice_simile(xcode, tariffario, TARIFFARIO_NORM)
             if chiave_simile:
                 voce = tariffario[chiave_simile]
@@ -192,10 +374,19 @@ def confronta_pdf_csv(pdf_file):
                     costo_totale,
                 ])
                 match_fuzzy.append(f"{codice_pdf} -> {voce['codice']}")
+                log(f"  Match fuzzy: {codice_pdf} -> {voce['codice']}")
             else:
-                non_trovati.append(codice_pdf)
+                non_trovati.append((codice_pdf, quantita))
+                log(f"  NON TROVATO: {codice_pdf}")
 
-    # 4. Output stringa
+    log(f"Confronto completato: {len(risultati)} trovati, {len(non_trovati)} non trovati")
+
+    # 4. Analisi finale con Claude: deduplicazione e voci mancanti
+    risultati, codici_non_trovati = analisi_finale_claude(
+        risultati, non_trovati, tariffario
+    )
+
+    # 5. Output stringa
     righe_str = []
     for r in risultati:
         righe_str.append(
@@ -206,17 +397,22 @@ def confronta_pdf_csv(pdf_file):
     if match_fuzzy:
         output_str += f"\n\n--- Codici trovati tramite match approssimato ({len(match_fuzzy)}): ---\n"
         output_str += "\n".join(match_fuzzy)
-    if non_trovati:
-        output_str += f"\n\n--- Codici non trovati nel tariffario ({len(non_trovati)}): ---\n"
-        output_str += ", ".join(non_trovati)
+    if codici_non_trovati:
+        output_str += f"\n\n--- Codici non trovati nel tariffario ({len(codici_non_trovati)}): ---\n"
+        output_str += ", ".join(codici_non_trovati)
 
-    # 5. Log finale
+    # 6. Log finale
     log_finale = (
         f"{log_estrazione} | "
         f"Trovati (esatti): {len(risultati) - len(match_fuzzy)} | "
         f"Trovati (fuzzy): {len(match_fuzzy)} | "
-        f"Non trovati: {len(non_trovati)}"
+        f"Non trovati: {len(codici_non_trovati)}"
     )
+
+    log("=" * 60)
+    log("ELABORAZIONE COMPLETATA")
+    log(f"  {log_finale}")
+    log("=" * 60)
 
     return risultati, output_str, log_finale
 
