@@ -31,6 +31,16 @@ Esempio:
 
 SYSTEM_ANALISI_FINALE = "Sei un analizzatore di dati di computi metrici. Rispondi SOLO con il JSON richiesto, senza testo aggiuntivo."
 
+formato_json="""```json
+{{
+  "risultati": [
+    ["codice", "descrizione", "unità", prezzo, quantità, costo_totale],
+    ...
+  ],
+  "non_trovati": ["codice1", "codice2", ...]
+}}
+```"""
+
 
 def build_prompt_analisi_finale(testo_risultati, testo_non_trovati, testo_tariffario):
     """
@@ -59,12 +69,4 @@ ISTRUZIONI:
 
 FORMATO OUTPUT — rispondi ESCLUSIVAMENTE con un JSON valido, senza testo aggiuntivo prima o dopo:
 
-```json
-{{
-  "risultati": [
-    ["codice", "descrizione", "unità", prezzo, quantità, costo_totale],
-    ...
-  ],
-  "non_trovati": ["codice1", "codice2", ...]
-}}
-```"""
+{formato_json}"""
