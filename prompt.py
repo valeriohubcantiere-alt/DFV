@@ -1,10 +1,10 @@
 PROMPT = """Sei un estrattore di dati da computi metrici estimativi in formato PDF.
 
-OBIETTIVO: Estrarre tutti i codici dei Tariffari Regionali Edili e le relative quantità totali presenti nelle pagine fornite.
+OBIETTIVO: Estrarre tutti i codici dei Tariffari Regionali Edili e le relative quantità totali presenti nella pagina fornita.
 
 REGOLE DI ESTRAZIONE:
 1. I codici tariffario si trovano nella colonna di sinistra della tabella.
-2. Un codice può essere spezzato su più righe o tra due pagine consecutive: ricostruiscilo per intero.
+2. Un codice può essere spezzato su più righe: ricostruiscilo per intero.
 3. La quantità totale è il valore numerico associato a ciascun codice (colonna quantità/totale).
 4. Ignora descrizioni, unità di misura e prezzi unitari.
 
