@@ -182,99 +182,142 @@ def estrai_codici_da_pdf(pdf_file, modello="claude-sonnet-4-5-20250929", dpi=200
     return lista_finale, log_str
 
 
-def deduplica_risultati(risultati):
+def analisi_finale_claude(risultati, non_trovati, tariffario, modello="claude-sonnet-4-5-20250929"):
     """
-    Rimuove doppioni dai risultati: per ogni codice tiene solo la voce
-    con la quantità più alta.
-    """
-    log("-" * 60)
-    log("DEDUPLICAZIONE RISULTATI")
-    log("-" * 60)
-
-    # Raggruppa per codice (colonna 0)
-    per_codice = {}
-    for riga in risultati:
-        codice = riga[0]
-        xcode = pulisci_codice(codice)
-        if xcode in per_codice:
-            esistente = per_codice[xcode]
-            if riga[4] > esistente[4]:
-                log(f"  Doppione trovato: {codice} — qty {esistente[4]} sostituita con {riga[4]}")
-                per_codice[xcode] = riga
-            else:
-                log(f"  Doppione trovato: {codice} — qty {riga[4]} scartata (esiste già con qty {esistente[4]})")
-        else:
-            per_codice[xcode] = riga
-
-    deduplicati = list(per_codice.values())
-    rimossi = len(risultati) - len(deduplicati)
-    if rimossi > 0:
-        log(f"  Rimossi {rimossi} doppioni, mantenute {len(deduplicati)} voci")
-    else:
-        log("  Nessun doppione trovato")
-
-    return deduplicati
-
-
-def inserisci_voci_mancanti(risultati, non_trovati, tariffario, tariffario_norm):
-    """
-    Per i codici non trovati, prova un ulteriore tentativo di ricerca nel tariffario.
-    Se trovati, li inserisce nei risultati copiando la descrizione dal tariffario,
-    senza modificare le voci già inserite.
+    Chiede a Claude di analizzare i risultati finali per:
+    1. Trovare e rimuovere doppioni (tiene la quantità più alta)
+    2. Inserire voci mancanti copiando la descrizione dal tariffario
+    Non modifica le voci già correttamente inserite.
     """
     log("-" * 60)
-    log("INSERIMENTO VOCI MANCANTI")
+    log("ANALISI FINALE CON CLAUDE (deduplicazione e voci mancanti)")
     log("-" * 60)
 
-    if not non_trovati:
-        log("  Nessuna voce mancante da inserire")
-        return risultati, non_trovati
+    if not risultati and not non_trovati:
+        log("  Nessun dato da analizzare")
+        return risultati, []
 
-    # Codici già presenti nei risultati (per non duplicare)
-    codici_presenti = set()
-    for riga in risultati:
-        codici_presenti.add(pulisci_codice(riga[0]))
+    # Prepara i dati per Claude
+    righe_risultati = []
+    for r in risultati:
+        righe_risultati.append(
+            f"  Codice: {r[0]} | Descrizione: {r[1]} | Unità: {r[2]} | Prezzo: {r[3]} | Qty: {r[4]} | Totale: {r[5]}"
+        )
+    testo_risultati = "\n".join(righe_risultati) if righe_risultati else "(nessuno)"
 
-    ancora_mancanti = []
-    inseriti = 0
+    righe_non_trovati = []
+    for codice, qty in non_trovati:
+        righe_non_trovati.append(f"  {codice} (qty: {qty})")
+    testo_non_trovati = "\n".join(righe_non_trovati) if righe_non_trovati else "(nessuno)"
 
-    for codice_pdf, quantita in non_trovati:
-        xcode = pulisci_codice(codice_pdf)
-        norm = normalizza_codice(xcode)
+    # Prepara un estratto del tariffario con i codici più simili ai non trovati
+    codici_tariffario_sample = []
+    for codice_nt, _ in non_trovati:
+        xcode = pulisci_codice(codice_nt)
+        # Prendi i primi caratteri come prefisso per filtrare
+        prefisso = xcode[:6] if len(xcode) >= 6 else xcode
+        for chiave, voce in tariffario.items():
+            if chiave.startswith(prefisso) and len(codici_tariffario_sample) < 50:
+                codici_tariffario_sample.append(
+                    f"  {voce['codice']} | {voce['descrizione']} | {voce['unita']} | {voce['prezzo']}"
+                )
+    testo_tariffario = "\n".join(codici_tariffario_sample) if codici_tariffario_sample else "(nessun codice simile trovato)"
 
-        # Controlla se il codice è già nei risultati
-        if xcode in codici_presenti:
-            log(f"  Voce {codice_pdf} già presente nei risultati, salto")
-            continue
+    prompt_analisi = f"""Analizza i seguenti risultati estratti da un computo metrico PDF e confrontati con un tariffario.
 
-        # Cerca nel tariffario con normalizzazione
-        chiave = tariffario_norm.get(norm)
-        if chiave and chiave in tariffario:
-            voce = tariffario[chiave]
-            costo_totale = round(voce['prezzo'] * quantita, 2)
-            risultati.append([
-                voce['codice'],
-                voce['descrizione'],
-                voce['unita'],
-                voce['prezzo'],
-                quantita,
-                costo_totale,
-            ])
-            codici_presenti.add(pulisci_codice(voce['codice']))
-            inseriti += 1
-            log(f"  Voce mancante inserita: {codice_pdf} -> {voce['codice']} (qty: {quantita})")
-        else:
-            ancora_mancanti.append((codice_pdf, quantita))
+RISULTATI ATTUALI:
+{testo_risultati}
 
-    if inseriti > 0:
-        log(f"  Inserite {inseriti} voci mancanti")
-    else:
-        log("  Nessuna voce mancante recuperata dal tariffario")
+CODICI NON TROVATI NEL TARIFFARIO:
+{testo_non_trovati}
 
-    if ancora_mancanti:
-        log(f"  Ancora non trovati: {len(ancora_mancanti)} codici")
+VOCI TARIFFARIO SIMILI AI CODICI NON TROVATI:
+{testo_tariffario}
 
-    return risultati, ancora_mancanti
+ISTRUZIONI:
+1. DOPPIONI: Se trovi codici duplicati (stesso codice che appare più volte), tieni SOLO quello con la quantità più alta e rimuovi gli altri.
+2. VOCI MANCANTI: Per i codici non trovati, cerca tra le voci del tariffario simili se c'è una corrispondenza. Se sì, inseriscili copiando descrizione, unità e prezzo dal tariffario. Se non trovi corrispondenza, lasciali come non trovati.
+3. NON MODIFICARE le voci già correttamente inserite nei risultati (non cambiare quantità, descrizione o prezzo delle voci esistenti).
+
+FORMATO OUTPUT — rispondi ESCLUSIVAMENTE con due liste Python, senza testo aggiuntivo:
+
+RISULTATI:
+```python
+[("codice", "descrizione", "unità", prezzo, quantità, costo_totale), ...]
+```
+
+NON_TROVATI:
+```python
+["codice1", "codice2", ...]
+```"""
+
+    log("  Invio dati a Claude per analisi finale...")
+
+    try:
+        response = client.messages.create(
+            model=modello,
+            max_tokens=8192,
+            system="Sei un analizzatore di dati di computi metrici. Rispondi SOLO con le liste Python richieste.",
+            messages=[{"role": "user", "content": prompt_analisi}],
+        )
+        testo_risposta = response.content[0].text
+        log("  Risposta ricevuta da Claude")
+
+        # Parse risultati aggiornati
+        # Cerca il blocco RISULTATI
+        risultati_nuovi = []
+        non_trovati_nuovi = []
+
+        blocchi = re.findall(r'```python\s*(.*?)```', testo_risposta, re.DOTALL)
+
+        if len(blocchi) >= 1:
+            try:
+                data_risultati = ast.literal_eval(blocchi[0].strip())
+                if isinstance(data_risultati, list):
+                    for item in data_risultati:
+                        if isinstance(item, (tuple, list)) and len(item) == 6:
+                            risultati_nuovi.append([
+                                str(item[0]),
+                                str(item[1]),
+                                str(item[2]),
+                                float(item[3]),
+                                float(item[4]),
+                                float(item[5]),
+                            ])
+            except (ValueError, SyntaxError) as e:
+                log(f"  ERRORE parsing risultati da Claude: {e}")
+                log("  Mantengo i risultati originali")
+                return risultati, [c for c, _ in non_trovati]
+
+        if len(blocchi) >= 2:
+            try:
+                data_nt = ast.literal_eval(blocchi[1].strip())
+                if isinstance(data_nt, list):
+                    non_trovati_nuovi = [str(c) for c in data_nt]
+            except (ValueError, SyntaxError):
+                non_trovati_nuovi = [c for c, _ in non_trovati]
+
+        # Log delle modifiche
+        diff_count = len(risultati) - len(risultati_nuovi)
+        if diff_count > 0:
+            log(f"  Rimossi {diff_count} doppioni")
+        elif diff_count < 0:
+            log(f"  Aggiunte {-diff_count} voci mancanti")
+
+        if len(non_trovati_nuovi) < len(non_trovati):
+            recuperati = len(non_trovati) - len(non_trovati_nuovi)
+            log(f"  Recuperate {recuperati} voci dai codici non trovati")
+
+        if non_trovati_nuovi:
+            log(f"  Ancora non trovati: {len(non_trovati_nuovi)} codici")
+
+        log("  Analisi finale completata")
+        return risultati_nuovi, non_trovati_nuovi
+
+    except Exception as e:
+        log(f"  ERRORE nella chiamata a Claude: {e}")
+        log("  Mantengo i risultati originali")
+        return risultati, [c for c, _ in non_trovati]
 
 
 def confronta_pdf_csv(pdf_file):
@@ -338,16 +381,12 @@ def confronta_pdf_csv(pdf_file):
 
     log(f"Confronto completato: {len(risultati)} trovati, {len(non_trovati)} non trovati")
 
-    # 4. Deduplicazione: rimuove doppioni tenendo la quantità più alta
-    risultati = deduplica_risultati(risultati)
-
-    # 5. Inserimento voci mancanti: tenta di recuperare codici non trovati
-    risultati, non_trovati_finali = inserisci_voci_mancanti(
-        risultati, non_trovati, tariffario, TARIFFARIO_NORM
+    # 4. Analisi finale con Claude: deduplicazione e voci mancanti
+    risultati, codici_non_trovati = analisi_finale_claude(
+        risultati, non_trovati, tariffario
     )
-    codici_non_trovati = [codice for codice, _ in non_trovati_finali]
 
-    # 6. Output stringa
+    # 5. Output stringa
     righe_str = []
     for r in risultati:
         righe_str.append(
@@ -362,7 +401,7 @@ def confronta_pdf_csv(pdf_file):
         output_str += f"\n\n--- Codici non trovati nel tariffario ({len(codici_non_trovati)}): ---\n"
         output_str += ", ".join(codici_non_trovati)
 
-    # 7. Log finale
+    # 6. Log finale
     log_finale = (
         f"{log_estrazione} | "
         f"Trovati (esatti): {len(risultati) - len(match_fuzzy)} | "
