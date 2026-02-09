@@ -114,42 +114,30 @@ def estrai_codici_da_pdf(pdf_file, modello="claude-sonnet-4-5-20250929", dpi=200
     doc.close()
     log(f"Conversione completata: {numero_pagine} immagini generate ({dpi} DPI)")
 
-    if numero_pagine < 2:
-        log("ERRORE: il PDF deve avere almeno 2 pagine.")
-        return [], "Il PDF deve avere almeno 2 pagine."
+    if numero_pagine < 1:
+        log("ERRORE: il PDF non contiene pagine.")
+        return [], "Il PDF non contiene pagine."
 
     risposte_raw = []
-    coppie_totali = numero_pagine - 1
 
     log("-" * 60)
-    log(f"ANALISI CODICI CON CLAUDE ({coppie_totali} coppie di pagine)")
+    log(f"ANALISI CODICI CON CLAUDE ({numero_pagine} pagine, una alla volta)")
     log("-" * 60)
 
-    for i in range(coppie_totali):
-        p1 = i + 1
-        p2 = i + 2
-        img_1 = immagini[i]
-        img_2 = immagini[i + 1]
+    for i in range(numero_pagine):
+        num_pag = i + 1
+        img = immagini[i]
 
-        log(f"  Invio coppia pagine {p1}-{p2} a Claude... [{i + 1}/{coppie_totali}]")
+        log(f"  Invio pagina {num_pag} a Claude... [{num_pag}/{numero_pagine}]")
 
         content = [
-            {"type": "text", "text": f"\n--- PAGINA {p1} ---"},
+            {"type": "text", "text": f"\n--- PAGINA {num_pag} ---"},
             {
                 "type": "image",
                 "source": {
                     "type": "base64",
                     "media_type": "image/png",
-                    "data": img_to_base64(img_1),
-                },
-            },
-            {"type": "text", "text": f"\n--- PAGINA {p2} ---"},
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": img_to_base64(img_2),
+                    "data": img_to_base64(img),
                 },
             },
         ]
@@ -163,12 +151,12 @@ def estrai_codici_da_pdf(pdf_file, modello="claude-sonnet-4-5-20250929", dpi=200
             )
             testo_risposta = response.content[0].text
             risposte_raw.append(testo_risposta)
-            # Conta voci estratte da questa coppia
-            voci_coppia = len(re.findall(r'\(', testo_risposta.split('[')[-1])) if '[' in testo_risposta else 0
-            log(f"  Risposta ricevuta per pagine {p1}-{p2} (~{voci_coppia} voci)")
+            # Conta voci estratte da questa pagina
+            voci_pagina = len(re.findall(r'\(', testo_risposta.split('[')[-1])) if '[' in testo_risposta else 0
+            log(f"  Risposta ricevuta per pagina {num_pag} (~{voci_pagina} voci)")
         except Exception as e:
-            log(f"  ERRORE pagine {p1}-{p2}: {e}")
-            risposte_raw.append(f"ERRORE pagine {p1}-{p2}: {e}")
+            log(f"  ERRORE pagina {num_pag}: {e}")
+            risposte_raw.append(f"ERRORE pagina {num_pag}: {e}")
 
     log("-" * 60)
     log("AGGREGAZIONE RISULTATI")
@@ -179,7 +167,7 @@ def estrai_codici_da_pdf(pdf_file, modello="claude-sonnet-4-5-20250929", dpi=200
 
     log(f"Voci estratte dopo aggregazione: {len(lista_finale)}")
 
-    log_str = f"Pagine: {numero_pagine} | Coppie elaborate: {coppie_totali} | Voci estratte: {len(lista_finale)}"
+    log_str = f"Pagine elaborate: {numero_pagine} | Voci estratte: {len(lista_finale)}"
     return lista_finale, log_str
 
 
