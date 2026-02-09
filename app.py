@@ -12,7 +12,7 @@ import base64
 import time
 
 from prompt import PROMPT, SYSTEM_ANALISI_FINALE, build_prompt_analisi_finale
-from service.service_main import carica_tariffario_csv, pulisci_codice, normalizza_codice, trova_codice_simile
+from service.service_main import carica_tariffario_csv, pulisci_codice, normalizza_codice, normalizza_scheletro, trova_codice_simile
 
 
 def log(msg):
@@ -41,6 +41,14 @@ for xcode_key in TARIFFARIO:
     norm_key = normalizza_codice(xcode_key)
     if norm_key not in TARIFFARIO_NORM:
         TARIFFARIO_NORM[norm_key] = xcode_key
+
+# Precomputa mappa scheletro: {codice_solo_alfanumerico: chiave_xcode}
+TARIFFARIO_SKEL = {}
+for xcode_key in TARIFFARIO:
+    skel_key = normalizza_scheletro(xcode_key)
+    if skel_key not in TARIFFARIO_SKEL:
+        TARIFFARIO_SKEL[skel_key] = xcode_key
+
 log(f"Tariffario '{TARIFFARIO_NAME}' caricato: {len(TARIFFARIO)} voci")
 
 
@@ -90,7 +98,7 @@ def parse_liste_da_testo(testo):
     return sorted(risultato)
 
 
-def estrai_codici_da_pdf(pdf_file, modello="claude-sonnet-4-5-20250929", dpi=200):
+def estrai_codici_da_pdf(pdf_file, modello="claude-sonnet-4-5-20250929", dpi=300):
     """Estrae coppie (codice, quantità) dal PDF usando Claude."""
     log("=" * 60)
     log("INIZIO ELABORAZIONE PDF")
@@ -340,7 +348,7 @@ def confronta_pdf_csv(pdf_file):
         else:
             # Fallback: fuzzy matching
             log(f"  Ricerca fuzzy per: {codice_pdf}...")
-            chiave_simile = trova_codice_simile(xcode, tariffario, TARIFFARIO_NORM)
+            chiave_simile = trova_codice_simile(xcode, tariffario, TARIFFARIO_NORM, TARIFFARIO_SKEL)
             if chiave_simile:
                 voce = tariffario[chiave_simile]
                 costo_totale = round(voce['prezzo'] * quantita, 2)
