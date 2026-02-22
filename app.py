@@ -26,6 +26,7 @@ client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 # Precaricamento del tariffario
 TARIFFARIO_NAME = os.environ.get("TARIFFARIO_NAME", "Tariffario2026C")
 TARIFFARIO_PATH = os.environ.get("TARIFFARIO_PATH", "./Tariffario2026C.csv")
+AI_TEMPERATURE = float(os.environ.get("AI_TEMPERATURE", "0.2"))
 
 if not os.path.exists(TARIFFARIO_PATH):
     raise FileNotFoundError(
@@ -146,6 +147,7 @@ def estrai_codici_da_pdf(pdf_file, modello="claude-sonnet-4-5-20250929", dpi=200
             response = client.messages.create(
                 model=modello,
                 max_tokens=4096,
+                temperature=AI_TEMPERATURE,
                 system=PROMPT,
                 messages=[{"role": "user", "content": content}],
             )

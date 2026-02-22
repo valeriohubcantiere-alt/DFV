@@ -1,12 +1,15 @@
 import anthropic
 import fitz  # PyMuPDF
 import os
+from dotenv import load_dotenv
 from PIL import Image
 import io
 import base64
 
 # Configurazione API Claude
+load_dotenv()
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+AI_TEMPERATURE = float(os.environ.get("AI_TEMPERATURE", "0.2"))
 
 # Importa il prompt dal file esterno
 from prompt import PROMPT
@@ -103,6 +106,7 @@ def elabora_pdf_con_claude(percorso_pdf, modello="claude-sonnet-4-20250514", dpi
             response = client.messages.create(
                 model=modello,
                 max_tokens=4096,
+                temperature=AI_TEMPERATURE,
                 system=PROMPT,
                 messages=[{"role": "user", "content": content}],
             )
